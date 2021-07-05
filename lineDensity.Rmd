@@ -1,0 +1,129 @@
+---
+title: "lineDensity"
+author: "Mario D. van Telgen"
+date: "March 2019"
+output: pdf_document
+---
+
+# Overview
+
+`lineDensity` calculates a magnitude-per-unit area (density in km/km2) from polyline features that fall within a specified radius around each cell of the output `RasterLayer`.
+
+# Usage
+
+```{r module_usage}
+# dummy linear features layer
+library(SpaDES)
+library(sp)
+library(raster)
+library(spatstat)
+library(spatial.tools)
+library(tictoc)
+library(fftw)
+library(maptools)
+
+projCRS <- CRS("+proj=lcc +lat_1=49 +lat_2=77 +lat_0=0 +lon_0=-95 +x_0=0 +y_0=0 +ellps=GRS80 +units=m +no_defs")
+# road map of 100 m x 200 m
+road1 <- Lines(Line(cbind(c(0,100),c(50,50))), ID="rd_1")
+road2 <- Lines(Line(cbind(c(45,45),c(0,200))), ID="rd_2")
+Roads <- SpatialLines(list(road1,road2), proj4string=projCRS)
+
+# seismic line map of 60 x 400 m
+sl1 <- Lines(Line(cbind(c(80,20),c(0,300))), ID="sl_1")
+seismicLines <- SpatialLines(list(sl1), proj4string=projCRS)
+
+
+# Fictictious larger of smaller study area
+studyArea <- bbox_to_SpatialPolygons(extent(rbind(Roads,seismicLines))*1.5)
+# studyArea <- bbox_to_SpatialPolygons(extent(rbind(Roads,seismicLines))*.5)
+
+
+setPaths(modulePath = file.path("./modules"))
+# getPaths() # shows where the 4 relevant paths are
+
+times <- list(start = 0, end = .5)
+mapRes <- 1 # (meter)
+defaultInterval <- 1.0
+defaultPlotInterval <- 1.0
+defaultInitialPlotTime <- 1.0#times$start #NA
+defaultInitialSaveTime <- NA #don't be saving nuffink
+parameters <- list(
+  # .progress = list(type = "text", interval = 1), # for a progress bar
+  ## If there are further modules, each can have its own set of parameters:
+  lineDensity = list(
+    searchRadius = 10, # meters.
+    resolution = mapRes,# meters (width and height of pixels)
+    # templateLayer = studyArea,
+    method = "FFT", # c("FFT", "focal")
+    noiseRemoval = TRUE,
+    boundaryEffect = "lethal", # only workd with method "FFT".
+    increment = defaultInterval,
+    .plotInitialTime = defaultInitialPlotTime,
+    .plotInterval = defaultPlotInterval,
+    .saveInitialTime = defaultInitialSaveTime)
+)
+
+modules <- list("lineDensity")
+objects <- list(Roads = Roads, seismicLines = seismicLines)
+# objects <- list(Roads = Roads, seismicLines = seismicLines)
+
+mySim <- simInit(times = times, params = parameters, modules = modules,
+                 objects = objects)
+```
+
+```{r mySimOut}
+mySimOut <- spades(mySim)
+
+mySimOut$LFDensMap
+
+dev(); clearPlot()
+plot(mySimOut$LFDensMap)
+plot(Roads, col="red", add=T)
+plot(seismicLines, col="blue", add = T)
+```
+
+# Events
+
+Describe what happens for each event type.
+
+## Init  
+- minimum search radius is set
+
+## Density
+During this event the line densities are calculated.
+The procedure follows.
+1) calculation of lengths of linear features within each pixel.
+2) calculate unit per area
+2) FFT then smears the value within each pixel out over a circle with a 10km radius around each pixel and sums all values where they overlap (this is the same as summing all line length values (which are in meters) that lie within a radius of 10km around each pixel and dividing by the number of raster cells that make up the circle).
+3) These summed line lengths are then divided by pixel area (which makes m/m2) and multiplied by 1000 to convert them to km/km2. (edited)
+
+## Plotting
+
+Write what is plotted.
+
+## Saving
+
+Write what is saved.
+
+# Data dependencies
+
+## Input data
+
+How to obtain input data, and a description of the data required by the module.
+If `sourceURL` is specified, `downloadData("lineDensity", "path/to/modules/dir")` may be sufficient.
+
+## Output data
+
+The `lineDensity` module computes densities of linear feature within a specific radius around each raster cell, expressed as magnitude-per-unit area (km/km2). The default input object is `anthrDisturb`, from which features can be selected. In this model only the roads layer of `anthrDisturb` is used to calculate road density within a 10 km radius around each raster cell. The road density output `LFDensityMap` is masked to `waterRaster`, removing road density values in cell that represent water.
+
+`lineDensity` currently uses an approach that approximates line densities. First, lengths of linear features within each raster cell are calculated. The value for line length within each cell is then spread out over all neighbouring cells within a 10km radius and summed where they overlap using fast fourier transforms (fft). This is equivalent to summing total line length within a 10 km circle around each cell divided by circle area. These calculations can be done on smaller ‘tiles’ of the study area to reduce computational requirements and computation time (but has not been parallelized yet). The magnitude-per-unit area (km/km2) is calculated by dividing these summed values by pixel area (which makes m/m2) and multiplied by a factor 1000 to convert them to km/km2.
+
+*Important assumptions of the `lineDensity` module*
+Fft is an appropriate method for the calculation of feature densities.
+
+*Future versions of the `lineDensity` module could incorporate*
+- run calculations on tiles in parallel.
+- Calling python code to emulate ArcMap’s lineDensity function.
+
+*Links of `lineDensity` with other modules*
+`lineDensity` can be used to calculate road density from the `anthrDisturb` object, which is updated by the `anthrDisturbanceNWT` module. These road densities in `LFDensityMap` can subsequently be used in the `caribouRSFModel` module.
